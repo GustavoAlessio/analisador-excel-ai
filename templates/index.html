@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análise de Arquivos Excel</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-file-excel"></i> Análise de Arquivos Excel</h1>
+            <p>Faça upload de arquivos Excel (xlsx, xls) ou CSV.</p>
+        </div>
+
+        <div class="upload-section" id="uploadSection">
+            <div class="text-center">
+                <div class="upload-icon">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <h3>Faça upload do seu arquivo</h3>
+                <p>Formatos suportados: XLSX, XLS, CSV</p>
+                
+                <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+                    <div class="file-input-wrapper">
+                        <label class="custom-file-upload">
+                            <i class="fas fa-file-upload"></i> Selecionar Arquivo
+                            <input type="file" id="fileInput" name="file" accept=".xlsx,.xls,.csv" />
+                        </label>
+                    </div>
+                    
+                    <div class="file-name" id="fileName"></div>
+                    
+                    <div class="progress mt-4" id="uploadProgress">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary mt-4" id="uploadButton" disabled>
+                        <i class="fas fa-upload"></i> Enviar e Analisar
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="results-section" id="resultsSection">
+            <h3><i class="fas fa-chart-bar"></i> Resultados da Análise</h3>
+            <p>Clientes identificados com quantidade maior que 2:</p>
+            
+            <div class="alert alert-info" id="resultsSummary">
+                <i class="fas fa-info-circle"></i> Foram encontrados <span id="clientCount">0</span> clientes.
+            </div>
+            
+            <div class="table-responsive">
+                <table class="table table-hover" id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th>Nome do Cliente</th>
+                            <th>CPF</th>
+                            <th>Quantidade</th>
+                            <th>Planilha</th>
+                            <th>Detalhes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsTableBody">
+                        <!-- Resultados serão inseridos aqui -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="text-center mt-4">
+                <a href="#" class="btn btn-primary" id="downloadButton">
+                    <i class="fas fa-download"></i> Baixar Resultados
+                </a>
+                <button class="btn btn-secondary ms-2" id="newAnalysisButton">
+                    <i class="fas fa-redo"></i> Nova Análise
+                </button>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Desenvolvido Gustavo para análise de dados</p>
+        </div>
+    </div>
+
+    <!-- Modal para detalhes do cliente -->
+    <div class="modal fade" id="clientDetailsModal" tabindex="-1" aria-labelledby="clientDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="clientDetailsModalLabel">Detalhes do Cliente</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="clientDetailsBody">
+                    <!-- Detalhes do cliente serão inseridos aqui -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.getElementById('fileInput');
+            const fileName = document.getElementById('fileName');
+            const uploadButton = document.getElementById('uploadButton');
+            const uploadProgress = document.getElementById('uploadProgress');
+            const uploadSection = document.getElementById('uploadSection');
+            const resultsSection = document.getElementById('resultsSection');
+            const resultsTableBody = document.getElementById('resultsTableBody');
+            const downloadButton = document.getElementById('downloadButton');
+            const newAnalysisButton = document.getElementById('newAnalysisButton');
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const clientCount = document.getElementById('clientCount');
+            const uploadForm = document.getElementById('uploadForm');
+            const clientDetailsModal = new bootstrap.Modal(document.getElementById('clientDetailsModal'));
+            const clientDetailsBody = document.getElementById('clientDetailsBody');
+            
+            let downloadUrl = '';
+            let allResults = [];
+            
+            // Evento de seleção de arquivo
+            fileInput.addEventListener('change', function() {
+                if (this.files && this.files[0]) {
+                    fileName.textContent = this.files[0].name;
+                    uploadButton.disabled = false;
+                } else {
+                    fileName.textContent = '';
+                    uploadButton.disabled = true;
+                }
+            });
+            
+            // Evento de envio de formulário
+            uploadForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                if (fileInput.files && fileInput.files[0]) {
+                    const file = fileInput.files[0];
+                    
+                    // Verificar extensão do arquivo
+                    const fileExt = file.name.split('.').pop().toLowerCase();
+                    if (!['xlsx', 'xls', 'csv'].includes(fileExt)) {
+                        alert('Formato de arquivo não suportado. Por favor, selecione um arquivo XLSX, XLS ou CSV.');
+                        return;
+                    }
+                    
+                    // Mostrar overlay de carregamento
+                    loadingOverlay.style.display = 'flex';
+                    
+                    // Preparar FormData
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    // Enviar arquivo
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/upload', true);
+                    
+                    // Progresso do upload
+                    xhr.upload.onprogress = function(e) {
+                        if (e.lengthComputable) {
+                            const percentComplete = (e.loaded / e.total) * 100;
+                            uploadProgress.style.display = 'block';
+                            uploadProgress.querySelector('.progress-bar').style.width = percentComplete + '%';
+                        }
+                    };
+                    
+                    // Resposta do servidor
+                    xhr.onload = function() {
+                        loadingOverlay.style.display = 'none';
+                        
+                        if (xhr.status === 200) {
+                            const response = JSON.parse(xhr.responseText);
+                            
+                            if (response.success) {
+                                // Salvar resultados e URL de download
+                                allResults = response.results;
+                                downloadUrl = response.download_url;
+                                
+                                // Atualizar contagem de clientes
+                                clientCount.textContent = allResults.length;
+                                
+                                // Limpar tabela de resultados
+                                resultsTableBody.innerHTML = '';
+                                
+                                // Preencher tabela com resultados
+                                allResults.forEach(function(result, index) {
+                                    const row = document.createElement('tr');
+                                    
+                                    // Nome do cliente
+                                    const nameCell = document.createElement('td');
+                                    nameCell.textContent = result.nome || 'N/A';
+                                    row.appendChild(nameCell);
+                                    
+                                    // CPF
+                                    const cpfCell = document.createElement('td');
+                                    cpfCell.textContent = result.cpf || 'N/A';
+                                    row.appendChild(cpfCell);
+                                    
+                                    // Quantidade
+                                    const qtyCell = document.createElement('td');
+                                    qtyCell.textContent = result.quantidade || 'N/A';
+                                    row.appendChild(qtyCell);
+                                    
+                                    // Planilha
+                                    const sheetCell = document.createElement('td');
+                                    sheetCell.textContent = result.planilha || 'N/A';
+                                    row.appendChild(sheetCell);
+                                    
+                                    // Botão de detalhes
+                                    const detailsCell = document.createElement('td');
+                                    const detailsButton = document.createElement('button');
+                                    detailsButton.className = 'btn btn-sm btn-outline-primary';
+                                    detailsButton.innerHTML = '<i class="fas fa-info-circle"></i> Detalhes';
+                                    detailsButton.dataset.index = index;
+                                    detailsButton.addEventListener('click', function() {
+                                        showClientDetails(parseInt(this.dataset.index));
+                                    });
+                                    detailsCell.appendChild(detailsButton);
+                                    row.appendChild(detailsCell);
+                                    
+                                    resultsTableBody.appendChild(row);
+                                });
+                                
+                                // Atualizar URL de download
+                                downloadButton.href = downloadUrl;
+                                
+                                // Mostrar seção de resultados
+                                uploadSection.style.display = 'none';
+                                resultsSection.style.display = 'block';
+                            } else {
+                                alert('Erro: ' + response.error);
+                            }
+                        } else {
+                            try {
+                                const response = JSON.parse(xhr.responseText);
+                                alert('Erro: ' + response.error);
+                            } catch (e) {
+                                alert('Erro ao processar o arquivo. Por favor, tente novamente.');
+                            }
+                        }
+                    };
+                    
+                    xhr.onerror = function() {
+                        loadingOverlay.style.display = 'none';
+                        alert('Erro de conexão. Por favor, verifique sua conexão com a internet e tente novamente.');
+                    };
+                    
+                    xhr.send(formData);
+                }
+            });
+            
+            // Função para mostrar detalhes do cliente
+            function showClientDetails(index) {
+                const client = allResults[index];
+                
+                if (!client) {
+                    return;
+                }
+                
+                let detailsHtml = '<div class="table-responsive"><table class="table table-striped">';
+                
+                // Adicionar todas as propriedades do cliente
+                for (const [key, value] of Object.entries(client)) {
+                    detailsHtml += `<tr>
+                        <th>${key}</th>
+                        <td>${value}</td>
+                    </tr>`;
+                }
+                
+                detailsHtml += '</table></div>';
+                
+                // Atualizar modal
+                document.getElementById('clientDetailsModalLabel').textContent = 'Detalhes do Cliente: ' + (client.nome || 'Cliente');
+                clientDetailsBody.innerHTML = detailsHtml;
+                
+                // Mostrar modal
+                clientDetailsModal.show();
+            }
+            
+            // Evento para nova análise
+            newAnalysisButton.addEventListener('click', function() {
+                // Resetar formulário
+                fileInput.value = '';
+                fileName.textContent = '';
+                uploadButton.disabled = true;
+                uploadProgress.style.display = 'none';
+                uploadProgress.querySelector('.progress-bar').style.width = '0%';
+                
+                // Mostrar seção de upload
+                uploadSection.style.display = 'block';
+                resultsSection.style.display = 'none';
+            });
+        });
+    </script>
+</body>
+</html>
