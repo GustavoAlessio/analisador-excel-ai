@@ -28,104 +28,94 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def analyze_excel_file(file_path):
-    """Analisa um arquivo Excel para encontrar clientes com quantidade > 2"""
+    """Lê um arquivo Excel/CSV e retorna registros para análise de estoque."""
     results = []
-    
+
     try:
-        # Determinar o tipo de arquivo
         if file_path.endswith('.csv'):
             df = pd.read_csv(file_path)
-        else:  # xlsx ou xls
-            # Obter todas as planilhas
+            if not df.empty:
+                df = df.copy()
+                df['__planilha__'] = 'CSV'
+                results.extend(df.to_dict(orient='records'))
+        else:
             xls = pd.ExcelFile(file_path)
-            
-            # Para cada planilha no arquivo
             for sheet_name in xls.sheet_names:
                 df = pd.read_excel(file_path, sheet_name=sheet_name)
-                
                 if df.empty:
                     continue
-                
-                # Procurar colunas que podem conter informações de quantidade
-                quantity_cols = [col for col in df.columns if 
-                                any(term in str(col).lower() for term in ['quant', 'qtd', 'unid'])]
-                
-                # Se não encontrar colunas específicas, procurar por colunas numéricas
-                if not quantity_cols:
-                    for col in df.columns:
-                        if pd.api.types.is_numeric_dtype(df[col].dtype):
-                            quantity_cols.append(col)
-                
-                # Procurar colunas que podem conter informações de cliente
-                client_cols = [col for col in df.columns if 
-                              any(term in str(col).lower() for term in ['client', 'nome', 'customer', 'comprador', 'destinatário', 'usuário'])]
-                
-                # Procurar colunas que podem conter CPF
-                cpf_cols = [col for col in df.columns if 
-                           any(term in str(col).lower() for term in ['cpf', 'documento', 'doc'])]
-                
-                # Se encontrou colunas de quantidade e cliente
-                if quantity_cols and client_cols:
-                    for qty_col in quantity_cols:
-                        # Filtrar registros com quantidade > 2
-                        try:
-                            filtered_df = df[pd.to_numeric(df[qty_col], errors='coerce') > 2]
-                            
-                            if not filtered_df.empty:
-                                for _, row in filtered_df.iterrows():
-                                    client_info = {}
-                                    
-                                    # Obter nome do cliente
-                                    for client_col in client_cols:
-                                        if pd.notna(row.get(client_col)):
-                                            client_info['nome'] = str(row[client_col])
-                                            break
-                                    
-                                    # Obter CPF se disponível
-                                    for cpf_col in cpf_cols:
-                                        if pd.notna(row.get(cpf_col)):
-                                            client_info['cpf'] = str(row[cpf_col])
-                                            break
-                                    
-                                    # Adicionar quantidade
-                                    client_info['quantidade'] = float(row[qty_col])
-                                    
-                                    # Adicionar nome da planilha e coluna
-                                    client_info['planilha'] = sheet_name
-                                    client_info['coluna_quantidade'] = qty_col
-                                    
-                                    # Adicionar outras informações disponíveis
-                                    for col in df.columns:
-                                        if col not in client_info and pd.notna(row.get(col)):
-                                            client_info[str(col)] = str(row[col])
-                                    
-                                    results.append(client_info)
-                        except Exception as e:
-                            print(f"Erro ao processar coluna {qty_col}: {str(e)}")
-    
+                df = df.copy()
+                df['__planilha__'] = sheet_name
+                results.extend(df.to_dict(orient='records'))
     except Exception as e:
         print(f"Erro ao analisar arquivo: {str(e)}")
-    
+
     return results
 
+
+def build_fallback_analysis(file_data):
+    """Gera uma análise simples quando a API da OpenAI não está disponível."""
+    if not file_data:
+        return {
+            "analysis": "Nenhum dado válido foi encontrado no arquivo enviado."
+        }
+
+    df = pd.DataFrame(file_data)
+    columns = [str(col) for col in df.columns]
+    normalized_columns = [col.lower() for col in columns]
+
+    required_fields = {
+        "sku": ["sku"],
+        "mlb": ["mlb", "id anuncio", "id anúncio"],
+        "titulo": ["titulo", "título"],
+        "estoque": ["estoque", "quantidade", "qtd"],
+        "estoque_minimo": ["estoque minimo", "mínimo", "min"],
+        "status": ["status", "ativo", "pausado"],
+    }
+
+    missing = []
+    for field, keywords in required_fields.items():
+        if not any(any(keyword in col for keyword in keywords) for col in normalized_columns):
+            missing.append(field)
+
+    analysis_lines = [
+        "Resumo rápido (modo offline):",
+        f"- Registros carregados: {len(df)}",
+        f"- Colunas detectadas: {', '.join(columns)}",
+    ]
+
+    if missing:
+        analysis_lines.append("\n⚠️ Dados faltando para análise completa:")
+        analysis_lines.extend([f"- {field}" for field in missing])
+        analysis_lines.append("\nEnvie um arquivo com esses campos ou informe-os manualmente.")
+
+    return {"analysis": "\n".join(analysis_lines)}
+
 def analyze_with_openai(file_data):
-    """Usa a API da OpenAI para analisar os dados do arquivo"""
+    """Usa a API da OpenAI para analisar dados de estoque para Mercado Livre."""
     try:
-        # Preparar os dados para envio à API
         prompt = f"""
-        Analise os seguintes dados de um arquivo Excel e identifique clientes com quantidade maior que 2.
-        Para cada cliente identificado, extraia o nome e CPF (se disponível).
-        
-        Dados:
-        {json.dumps(file_data, ensure_ascii=False, indent=2)}
-        
-        Retorne apenas os clientes com quantidade maior que 2 no formato JSON:
-        [
-            {{"nome": "Nome do Cliente", "cpf": "CPF se disponível", "quantidade": valor}}
-        ]
-        """
-        
-        # Chamar a API da OpenAI
+Você é um assistente especialista em gestão de estoque para e-commerce no Mercado Livre.
+
+Objetivo: analisar dados de estoque e anúncios, apontar riscos de ruptura/pausa, tratar kits,
+priorizar reposições e sugerir ações para maximizar vendas.
+
+Regras:
+- Nunca sugerir venda sem estoque.
+- Priorizar anúncios ativos, premium, alta rotatividade e melhor conversão.
+- Sempre destacar alertas críticos com ícones: ⚠️, 🔴, 🟡, 🟢.
+- Se algum dado não estiver disponível, liste perguntas objetivas em "Perguntas Pendentes".
+
+Dados de entrada (amostra):
+{json.dumps(file_data[:200], ensure_ascii=False, indent=2)}
+
+Retorne um JSON estritamente neste formato:
+{{
+  "analysis": "Texto em português com seções: Alertas Críticos, Prioridades, Reposição Recomendada, Kits/Combos, Observações. Use listas e tabelas em texto quando fizer sentido.",
+  "questions": ["Pergunta objetiva 1", "Pergunta objetiva 2"]
+}}
+"""
+
         response = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
@@ -135,38 +125,35 @@ def analyze_with_openai(file_data):
             json={
                 "model": "gpt-4o",
                 "messages": [
-                    {"role": "system", "content": "Você é um assistente especializado em análise de dados de arquivos Excel."},
+                    {
+                        "role": "system",
+                        "content": "Você é um assistente especialista em gestão de estoque para Mercado Livre."
+                    },
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.3
             }
         )
-        
-        # Verificar resposta
+
         if response.status_code == 200:
             result = response.json()
             ai_response = result['choices'][0]['message']['content']
-            
-            # Extrair o JSON da resposta
+
             try:
-                # Tentar encontrar o JSON na resposta
                 import re
-                json_match = re.search(r'\[.*\]', ai_response, re.DOTALL)
+                json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
                 if json_match:
-                    ai_data = json.loads(json_match.group(0))
-                else:
-                    ai_data = json.loads(ai_response)
-                return ai_data
+                    return json.loads(json_match.group(0))
+                return json.loads(ai_response)
             except Exception as e:
                 print(f"Erro ao processar resposta da IA: {str(e)}")
-                return []
-        else:
-            print(f"Erro na API da OpenAI: {response.status_code} - {response.text}")
-            return []
-    
+                return {"analysis": ai_response.strip(), "questions": []}
+
+        print(f"Erro na API da OpenAI: {response.status_code} - {response.text}")
+        return build_fallback_analysis(file_data)
     except Exception as e:
         print(f"Erro ao analisar com OpenAI: {str(e)}")
-        return []
+        return build_fallback_analysis(file_data)
 
 @app.route('/')
 def index():
@@ -188,42 +175,23 @@ def upload_file():
         file.save(file_path)
         
         # Analisar o arquivo
-        results = analyze_excel_file(file_path)
-        
-        # Se tiver poucos resultados, usar a API da OpenAI para análise adicional
-        if len(results) < 5:
-            # Converter para formato que pode ser enviado para a API
-            sample_data = []
-            try:
-                if file_path.endswith('.csv'):
-                    df = pd.read_csv(file_path)
-                    sample_data = df.head(50).to_dict(orient='records')
-                else:
-                    xls = pd.ExcelFile(file_path)
-                    for sheet_name in xls.sheet_names:
-                        df = pd.read_excel(file_path, sheet_name=sheet_name)
-                        if not df.empty:
-                            sample_data.extend(df.head(50).to_dict(orient='records'))
-                
-                # Analisar com OpenAI
-                ai_results = analyze_with_openai(sample_data)
-                
-                # Mesclar resultados
-                for ai_result in ai_results:
-                    if ai_result not in results:
-                        results.append(ai_result)
-            except Exception as e:
-                print(f"Erro ao analisar com IA: {str(e)}")
-        
-        # Salvar resultados em um arquivo temporário para download
+        records = analyze_excel_file(file_path)
+
+        if OPENAI_API_KEY:
+            analysis_result = analyze_with_openai(records)
+        else:
+            analysis_result = build_fallback_analysis(records)
+
         temp_file = os.path.join(app.config['UPLOAD_FOLDER'], f"resultados_{uuid.uuid4()}.json")
         with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=4)
-        
+            json.dump(analysis_result, f, ensure_ascii=False, indent=4)
+
         return jsonify({
             'success': True,
             'message': f'Arquivo {filename} analisado com sucesso',
-            'results': results,
+            'analysis': analysis_result.get('analysis', ''),
+            'questions': analysis_result.get('questions', []),
+            'record_count': len(records),
             'download_url': f'/download/{os.path.basename(temp_file)}'
         })
     
@@ -242,13 +210,19 @@ def download_file(filename):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt="Relatório de Clientes com Quantidade > 2", ln=True, align='C')
+    pdf.cell(200, 10, txt="Relatório de Gestão de Estoque (Mercado Livre)", ln=True, align='C')
     pdf.ln(10)
 
-    for cliente in data:
-        linha = f"Nome: {cliente.get('nome', 'N/A')} | CPF: {cliente.get('cpf', 'N/A')} | Quantidade: {cliente.get('quantidade', 'N/A')}"
-        pdf.multi_cell(0, 10, txt=linha)
-        pdf.ln(2)
+    analysis_text = data.get('analysis', 'Sem análise disponível.')
+    for line in analysis_text.splitlines():
+        pdf.multi_cell(0, 8, txt=line)
+
+    questions = data.get('questions', [])
+    if questions:
+        pdf.ln(4)
+        pdf.multi_cell(0, 8, txt="Perguntas Pendentes:")
+        for question in questions:
+            pdf.multi_cell(0, 8, txt=f"- {question}")
 
     # ✅ Corrigido: gerar PDF como string e converter para BytesIO
     pdf_bytes = pdf.output(dest='S').encode('latin1')
