@@ -36,6 +36,26 @@ body {
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     display: none;
 }
+.analysis-card {
+    border: 1px solid #eef1f5;
+    border-radius: 12px;
+    padding: 20px;
+    background-color: #fdfdff;
+    box-shadow: 0 3px 10px rgba(37, 117, 252, 0.08);
+    margin-top: 20px;
+}
+.analysis-card h4 {
+    font-size: 18px;
+    margin-bottom: 12px;
+    color: #2575fc;
+}
+.analysis-content p {
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+}
+#questionsCard {
+    display: none;
+}
 .upload-icon {
     font-size: 48px;
     color: #6a11cb;
