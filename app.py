@@ -168,6 +168,176 @@ def analyze_with_openai(file_data):
         print(f"Erro ao analisar com OpenAI: {str(e)}")
         return []
 
+
+
+SHIFT_REPORT_SYSTEM_PROMPT = """
+Assuma o papel de um Analista Sênior de Infraestrutura e Service Desk responsável pela elaboração da passagem de turno da equipe de TI.
+Transforme as informações fornecidas em um relatório profissional, organizado, objetivo e de fácil leitura, mantendo linguagem corporativa.
+Regras obrigatórias:
+- Utilize Markdown.
+- Corrija erros de ortografia e gramática.
+- Nunca omita informações importantes.
+- Caso alguma informação esteja faltando, escreva "Não informado".
+- Destaque itens críticos com ícones adequados.
+- Mantenha o relatório pronto para e-mail, Microsoft Teams ou registro interno.
+"""
+
+SHIFT_REPORT_TEMPLATE = """📅 Passagem de Turno – TI
+
+Data: {data}
+
+Turno: {turno}
+
+✅ Status Geral dos Sistemas
+
+{status_sistemas}
+
+🎫 Chamados Atendidos (GLPI)
+
+{chamados}
+
+❓ Dúvidas Operacionais / Orientações
+
+{duvidas}
+
+🛠 Atividades Internas do TI
+
+{atividades}
+
+⚠ Incidentes
+
+{incidentes}
+
+📌 Pontos de Atenção para o Próximo Turno
+
+{pontos_atencao}
+
+📊 Resumo Executivo
+
+Resumo do Turno
+
+Chamados atendidos: {total_chamados}
+Pendências: {total_pendencias}
+Sistemas indisponíveis: {sistemas_indisponiveis}
+Sistemas em monitoramento: {sistemas_monitoramento}
+Atividades internas: {total_atividades}
+Incidentes: {total_incidentes}
+"""
+
+DEFAULT_SYSTEMS = [
+    "Opera Cloud", "Desbravador", "UniFi Network", "Firewall Fortigate",
+    "Leucotron", "Sustenta", "Nonius", "Sky"
+]
+
+
+def _normalize_lines(value):
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [line.strip(" -•\t") for line in str(value).splitlines() if line.strip(" -•\t")]
+
+
+def _format_system_status(sistemas):
+    lines = _normalize_lines(sistemas)
+    if not lines:
+        lines = [f"{system}: ✅ Ok" for system in DEFAULT_SYSTEMS]
+    formatted = []
+    for line in lines:
+        lower = line.lower()
+        if any(term in lower for term in ["indispon", "fora", "offline"]):
+            icon = "🔴 Indisponível"
+        elif any(term in lower for term in ["instável", "instavel", "lent", "oscil"]):
+            icon = "🟡 Instável"
+        elif any(term in lower for term in ["monitor", "acompan"]):
+            icon = "⚠ Em monitoramento"
+        elif any(term in line for term in ["✅", "🔴", "🟡", "⚠"]):
+            formatted.append(line)
+            continue
+        else:
+            icon = "✅ Ok"
+
+        if ":" in line:
+            system_name = line.split(":", 1)[0].strip()
+            formatted.append(f"{system_name}: {icon}")
+        else:
+            formatted.append(f"{line}: {icon}")
+    return "\n".join(formatted)
+
+
+def _format_block(value, empty_message="Não informado"):
+    lines = _normalize_lines(value)
+    if not lines:
+        return empty_message
+    return "\n".join(f"- {line}" for line in lines)
+
+
+def _format_tickets(value):
+    lines = _normalize_lines(value)
+    if not lines:
+        return "Não houve chamados informados."
+
+    formatted = []
+    for line in lines:
+        ticket_id = "Não informado"
+        if "#" in line:
+            ticket_id = "#" + line.split("#", 1)[1].split()[0].strip(" -–—;,")
+
+        lower = line.lower()
+        if "resolvido" in lower or "finalizado" in lower:
+            status = "✅ Resolvido"
+        elif "andamento" in lower or "tratativa" in lower:
+            status = "🟡 Em andamento"
+        elif "pendente" in lower or "aguard" in lower:
+            status = "🔴 Pendente"
+        else:
+            status = "Não informado"
+
+        formatted.append(
+            f"GLPI {ticket_id}\n\n"
+            "Setor: Não informado\n\n"
+            f"Descrição: {line}\n\n"
+            "Atendimento realizado: Não informado\n\n"
+            f"Status: {status}"
+        )
+
+    return "\n\n".join(formatted)
+
+
+def _count_pending(chamados, pontos):
+    text = f"{chamados}\n{pontos}".lower()
+    return sum(text.count(term) for term in ["pendente", "aguardar", "em andamento"])
+
+
+def build_shift_report(data):
+    chamados = data.get("chamados", "")
+    incidentes = data.get("incidentes", "")
+    atividades = data.get("atividades", "")
+    pontos = data.get("pontos_atencao", "")
+    sistema_lines = _normalize_lines(data.get("sistemas"))
+    unavailable = [line.split(":", 1)[0] for line in sistema_lines if any(term in line.lower() for term in ["indispon", "fora", "offline"])]
+    monitoring = [line.split(":", 1)[0] for line in sistema_lines if any(term in line.lower() for term in ["monitor", "acompan"])]
+    incident_lines = _normalize_lines(incidentes)
+    activity_lines = _normalize_lines(atividades)
+    chamados_lines = _normalize_lines(chamados)
+
+    return SHIFT_REPORT_TEMPLATE.format(
+        data=data.get("data") or "Não informado",
+        turno=data.get("turno") or "Não informado",
+        status_sistemas=_format_system_status(data.get("sistemas")),
+        chamados=_format_tickets(chamados),
+        duvidas=_format_block(data.get("duvidas"), "Não informado"),
+        atividades=_format_block(atividades, "Não informado"),
+        incidentes=_format_block(incidentes, "Não houve incidentes relevantes durante o turno."),
+        pontos_atencao=_format_block(pontos, "Manter apenas as rotinas operacionais programadas."),
+        total_chamados=len(chamados_lines),
+        total_pendencias=_count_pending(chamados, pontos),
+        sistemas_indisponiveis=", ".join(unavailable) if unavailable else "Nenhum",
+        sistemas_monitoramento=", ".join(monitoring) if monitoring else "Nenhum",
+        total_atividades=len(activity_lines),
+        total_incidentes=len(incident_lines) if incident_lines else "Nenhum",
+    )
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -228,6 +398,42 @@ def upload_file():
         })
     
     return jsonify({'error': 'Tipo de arquivo não permitido'}), 400
+
+
+
+@app.route('/generate-shift-report', methods=['POST'])
+def generate_shift_report():
+    payload = request.get_json(silent=True) or {}
+    fallback_report = build_shift_report(payload)
+
+    if not OPENAI_API_KEY:
+        return jsonify({'success': True, 'report': fallback_report, 'source': 'template'})
+
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": SHIFT_REPORT_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Gere a passagem de turno seguindo exatamente a estrutura solicitada. Dados recebidos:\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n\nUse este rascunho como referência e melhore a redação sem remover informações:\n{fallback_report}"}
+                ],
+                "temperature": 0.2
+            },
+            timeout=30
+        )
+        if response.status_code == 200:
+            result = response.json()
+            return jsonify({'success': True, 'report': result['choices'][0]['message']['content'], 'source': 'openai'})
+        print(f"Erro na API da OpenAI: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Erro ao gerar passagem de turno com OpenAI: {str(e)}")
+
+    return jsonify({'success': True, 'report': fallback_report, 'source': 'template'})
 
 @app.route('/download/<filename>')
 def download_file(filename):

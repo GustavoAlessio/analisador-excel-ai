@@ -163,3 +163,23 @@ body {
         padding: 20px;
     }
 }
+.report-section {
+    background-color: white;
+    padding: 30px;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-bottom: 30px;
+}
+.report-output {
+    background: #111827;
+    color: #f9fafb;
+    border-radius: 10px;
+    min-height: 120px;
+    padding: 20px;
+    white-space: pre-wrap;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.5;
+}
+.form-label {
+    font-weight: 600;
+}

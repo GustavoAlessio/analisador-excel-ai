@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Análise de Arquivos Excel</title>
+    <title>Passagem de Turno TI</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -15,8 +15,60 @@
 
     <div class="container">
         <div class="header">
-            <h1><i class="fas fa-file-excel"></i> Análise de Clientes Arquivos Excel</h1>
-            <p>Faça upload de arquivos Excel (xlsx, xls) ou CSV.</p>
+            <h1><i class="fas fa-headset"></i> Passagem de Turno TI</h1>
+            <p>Gere relatórios padronizados de passagem de turno e mantenha a análise de arquivos Excel disponível.</p>
+        </div>
+
+
+        <div class="report-section" id="reportSection">
+            <h3><i class="fas fa-clipboard-list"></i> Gerador de Passagem de Turno</h3>
+            <p>Preencha as informações do turno. Campos em branco serão tratados como <strong>Não informado</strong> ou com mensagens padrão.</p>
+
+            <form id="shiftReportForm">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label for="reportDate" class="form-label">Data</label>
+                        <input type="date" class="form-control" id="reportDate" name="data">
+                    </div>
+                    <div class="col-md-6">
+                        <label for="reportShift" class="form-label">Turno</label>
+                        <select class="form-select" id="reportShift" name="turno">
+                            <option value="">Selecione</option>
+                            <option>Manhã</option>
+                            <option>Tarde</option>
+                            <option>Noite</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="systemsStatus" class="form-label">Status dos Sistemas</label>
+                        <textarea class="form-control" id="systemsStatus" rows="5" placeholder="Opera Cloud: Ok&#10;Firewall Fortigate: Em monitoramento"></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="tickets" class="form-label">Chamados GLPI</label>
+                        <textarea class="form-control" id="tickets" rows="5" placeholder="GLPI #123 - Setor: Recepção - Descrição: ... - Status: Resolvido"></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="questions" class="form-label">Dúvidas / Orientações</label>
+                        <textarea class="form-control" id="questions" rows="4" placeholder="Origem: A&B - Pergunta: ... - Tratativa: ... - Status: ..."></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="internalActivities" class="form-label">Atividades Internas</label>
+                        <textarea class="form-control" id="internalActivities" rows="4" placeholder="Atualização de inventário&#10;Monitoramento&#10;Backup"></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="incidents" class="form-label">Incidentes</label>
+                        <textarea class="form-control" id="incidents" rows="4" placeholder="Horário - Impacto - Causa - Solução - Situação atual"></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="attentionPoints" class="form-label">Pontos de Atenção</label>
+                        <textarea class="form-control" id="attentionPoints" rows="4" placeholder="Monitorar sistema X&#10;Aguardar retorno de chamado"></textarea>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary mt-4"><i class="fas fa-wand-magic-sparkles"></i> Gerar Passagem</button>
+                <button type="button" class="btn btn-secondary mt-4 ms-2" id="copyReportButton" disabled><i class="fas fa-copy"></i> Copiar</button>
+            </form>
+
+            <div class="report-output mt-4" id="reportOutput" aria-live="polite"></div>
         </div>
 
         <div class="upload-section" id="uploadSection">
@@ -127,6 +179,57 @@
             let downloadUrl = '';
             let allResults = [];
             
+
+            const shiftReportForm = document.getElementById('shiftReportForm');
+            const reportOutput = document.getElementById('reportOutput');
+            const copyReportButton = document.getElementById('copyReportButton');
+            let generatedReport = '';
+
+            shiftReportForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                const payload = {
+                    data: document.getElementById('reportDate').value,
+                    turno: document.getElementById('reportShift').value,
+                    sistemas: document.getElementById('systemsStatus').value,
+                    chamados: document.getElementById('tickets').value,
+                    duvidas: document.getElementById('questions').value,
+                    atividades: document.getElementById('internalActivities').value,
+                    incidentes: document.getElementById('incidents').value,
+                    pontos_atencao: document.getElementById('attentionPoints').value
+                };
+
+                loadingOverlay.style.display = 'flex';
+                fetch('/generate-shift-report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                    .then(response => response.json())
+                    .then(response => {
+                        if (!response.success) {
+                            throw new Error(response.error || 'Erro ao gerar relatório.');
+                        }
+                        generatedReport = response.report;
+                        reportOutput.textContent = generatedReport;
+                        copyReportButton.disabled = false;
+                    })
+                    .catch(error => alert(error.message))
+                    .finally(() => {
+                        loadingOverlay.style.display = 'none';
+                    });
+            });
+
+            copyReportButton.addEventListener('click', function() {
+                if (!generatedReport) {
+                    return;
+                }
+                navigator.clipboard.writeText(generatedReport);
+                copyReportButton.innerHTML = '<i class="fas fa-check"></i> Copiado';
+                setTimeout(() => {
+                    copyReportButton.innerHTML = '<i class="fas fa-copy"></i> Copiar';
+                }, 2000);
+            });
+
             // Evento de seleção de arquivo
             fileInput.addEventListener('change', function() {
                 if (this.files && this.files[0]) {
